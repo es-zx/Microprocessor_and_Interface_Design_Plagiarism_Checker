@@ -431,15 +431,15 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 
                 if (llmReasoning) {
                     // LLM analysis available
-                    document.getElementById('analysis-title').innerText = '🤖 LLM Analysis';
+                    document.getElementById('analysis-title').innerText = 'LLM Analysis';
                     document.getElementById('analysis-content').innerText = llmReasoning;
                 } else if (verdictReason) {
                     // No LLM, show algorithm analysis
-                    document.getElementById('analysis-title').innerText = '📊 Algorithm Analysis';
+                    document.getElementById('analysis-title').innerText = 'Algorithm Analysis';
                     document.getElementById('analysis-content').innerText = verdictReason;
                 } else {
                     // Fallback
-                    document.getElementById('analysis-title').innerText = '📊 Analysis';
+                    document.getElementById('analysis-title').innerText = 'Analysis';
                     document.getElementById('analysis-content').innerText = 'No analysis available';
                 }
                 
