@@ -8,7 +8,7 @@ def get_llm_prompt(code1, code2):
     prompt = f"""
 You are an expert code plagiarism detector for 8051 assembly and C.
 Compare the following two code snippets and determine if they are plagiarized.
-The codes are implemented for the same project, thus it is acceptable for algorithms to be 90% similar, as long as some part of logic is different.
+The codes are implemented for the same project, thus it is acceptable for algorithms to be very very similar, as long as some part of logic is different.
 Ignore variable renaming, comment changes, or whitespace differences.
 Focus on logic, use of registers, control flow, and algorithm structure.
 

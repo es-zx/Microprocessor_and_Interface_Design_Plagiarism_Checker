@@ -199,8 +199,8 @@ if __name__ == "__main__":
     src_threshold = 0.8
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    root_path = os.path.join(repo_root, '1141_E930600-程式碼與hex-20251120')
-
+    root_path = os.path.join(repo_root, 'Lab 5')
+    print(f"\nProcessing root path: {root_path}")
 
     results = check_plagiarism(root_path, hex_threshold, src_threshold, lab_name)
     
