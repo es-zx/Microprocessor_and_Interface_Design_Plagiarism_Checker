@@ -7,11 +7,13 @@ from llm_analyzer import analyze_pair_with_llm
 from reporter import generate_html_report
 
 
-def check_plagiarism(root_path, hex_threshold, src_threshold, lab_name="Lab"):
+def check_plagiarism(root_path, filter_mode="threshold", 
+                    hex_threshold=0.7, src_threshold=0.8, 
+                    top_metric="max_score", top_percent=0.05,
+                    lab_name="Lab"):
 
     """
     Main function to check plagiarism.
-
     """
     print("Step 1: Crawling and preprocessing...")
     student_files = crawl_directory(root_path)
@@ -56,12 +58,14 @@ def check_plagiarism(root_path, hex_threshold, src_threshold, lab_name="Lab"):
             try:
                 with open(hex_file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                    full_hex += normalize_hex(content)
+                    hex_data, _ = normalize_hex(content)  # Ignore validity for now
+                    full_hex += hex_data
 
             except Exception as e:
                 print(f"Error reading {hex_file}: {e}")
 
         student_data[student]['hex'] = full_hex
+        student_data[student]['hex_length'] = len(full_hex)
         
 
         # Check if hex is empty (illegal submission)
@@ -72,104 +76,173 @@ def check_plagiarism(root_path, hex_threshold, src_threshold, lab_name="Lab"):
             else:
                 student_data[student]['illegal_reason'] = "無效提交：未找到有效的 hex 檔案"
         
+    
+    # Find median hex length across all students (excluding empty ones)
+    hex_lengths = [data['hex_length'] for data in student_data.values() if data['hex_length'] > 0]
+    
+    if hex_lengths:
+        hex_lengths.sort()
+        n = len(hex_lengths)
+        if n % 2 == 0:
+            median_hex_length = (hex_lengths[n//2 - 1] + hex_lengths[n//2]) / 2
+        else:
+            median_hex_length = hex_lengths[n//2]
+        
+        # Validate hex length: mark as invalid if outside median ± 25% range
+        lower_threshold = median_hex_length * 0.75
+        upper_threshold = median_hex_length * 1.25
+        
+        for student, data in student_data.items():
+            if data['hex_length'] > 0 and (data['hex_length'] < lower_threshold or data['hex_length'] > upper_threshold):
+                student_data[student]['illegal_submission'] = True
+                if student_data[student]['illegal_reason']:
+                    student_data[student]['illegal_reason'] += f" | Hex檔案不完整 (長度{data['hex_length']}，中位數{int(median_hex_length)})"
+                else:
+                    student_data[student]['illegal_reason'] = f"無效提交：Hex檔案不完整 (長度{data['hex_length']}，中位數{int(median_hex_length)})"
+        
 
-    print("Step 2: Pairwise comparison...")
+    print("Step 2: Calculating similarities...")
     students = list(student_data.keys())
     pairs = list(itertools.combinations(students, 2))
 
-    results = []
+    all_comparisons = []
 
-    for student1, student2 in tqdm(pairs, desc="Comparing pairs", unit="pair"):
+    for student1, student2 in tqdm(pairs, desc="Calculating pairs", unit="pair"):
         # Source comparison
         src1 = student_data[student1]['source']
         src2 = student_data[student2]['source']
-        src_sim = {'jaccard': 0, 'cosine': 0, 'levenshtein': 0}
+        src_sim = {'token_seq': 0, 'levenshtein': 0}
 
         if src1 and src2:
             src_sim = calculate_combined_similarity(src1, src2)
             
 
-        # Hex comparison
+        # Hex comparison - only use Levenshtein
         hex1 = student_data[student1]['hex']
         hex2 = student_data[student2]['hex']
-        hex_sim = {'jaccard': 0, 'cosine': 0, 'levenshtein': 0}
+        hex_lev = 0
         if hex1 and hex2:
-            hex_sim = calculate_combined_similarity(hex1, hex2)
+            from detector import calculate_levenshtein_similarity
+            hex_lev = calculate_levenshtein_similarity(hex1, hex2)
    
-        # Calculate max scores (Composite scores removed)
+        # Calculate scores
         max_src_sim = max(src_sim.values()) if src_sim else 0
-        max_hex_sim = max(hex_sim.values()) if hex_sim else 0
-        current_max = max(max_src_sim, max_hex_sim)
+        max_hex_sim = hex_lev
         
-        # Screening: Hex any metric > 0.7 OR Source any metric > 0.8
-        if max_hex_sim > hex_threshold or max_src_sim > src_threshold:
-            llm_result = None
-            llm_triggered = False
-            verdict = "未抄襲"
-            verdict_reason = ""
-            
-            # Rule 1: Hex max score = 1.0 → Definite plagiarism, skip LLM
-            if max_hex_sim == 1.0:
-                verdict = "抄襲"
-                verdict_reason = "Hex檔案完全相同 (100%)"
-                llm_triggered = False
+        # Average Score = Average of Token Seq + Levenshtein (Source only)
+        # There are 2 metrics now
+        avg_score = (src_sim['token_seq'] + src_sim['levenshtein']) / 2.0
+        
+        # Store all data for filtering
+        all_comparisons.append({
+            'student1': student1,
+            'student2': student2,
+            'source_similarity': src_sim,
+            'hex_levenshtein': hex_lev,
+            'max_hex_sim': max_hex_sim,
+            'max_src_sim': max_src_sim,
+            'avg_score': avg_score
+        })
 
-            # Rule 2: Trigger LLM for ALL suspicious pairs (except definite plagiarism)
-            else:
-                llm_triggered = True
-                llm_result = analyze_pair_with_llm(src1, src2)
+    print(f"Step 3: Filtering pairs (Mode: {filter_mode})...")
+    filtered_pairs = []
+
+    if filter_mode == "threshold":
+        # Filter by threshold
+        # Mode 1: Check if Average Score > SRC_THRESHOLD OR Hex > HEX_THRESHOLD
+        for comp in all_comparisons:
+            if comp['max_hex_sim'] > hex_threshold or comp['avg_score'] > src_threshold:
+                filtered_pairs.append(comp)
                 
-                # Rule 3: Use LLM result if available
-                if llm_result and 'is_plagiarized' in llm_result:
-                    verdict = "抄襲" if llm_result['is_plagiarized'] else "未抄襲"
-                    verdict_reason = f"LLM分析: {llm_result.get('reasoning', 'N/A')}"
-                else:
-                    # LLM unavailable, fallback to algorithm
-                    verdict = "抄襲" if current_max > 0.85 else "未抄襲"
-                    verdict_reason = f"LLM分析不可用 - 演算法分析: Hex Max={max_hex_sim:.2f}, Source Max={max_src_sim:.2f}"
+    elif filter_mode == "top_percent":
+        # Sort and take top N%
+        total_pairs = len(all_comparisons)
+        top_n = int(total_pairs * top_percent)
+        if top_n < 1: top_n = 1
+        
+        # Determine sort key
+        def get_sort_key(comp):
+            if top_metric == "avg_score":
+                return comp['avg_score'] # Average of 2 source metrics
+            elif top_metric == "levenshtein":
+                return comp['source_similarity']['levenshtein'] # Ignore Hex levenshtein
+            elif top_metric in comp['source_similarity']:
+                return comp['source_similarity'][top_metric]
+            else:
+                return comp['avg_score'] # Fallback
+        
+        all_comparisons.sort(key=get_sort_key, reverse=True)
+        filtered_pairs = all_comparisons[:top_n]
+        print(f"Selected top {top_n} pairs ({top_percent*100}%) based on {top_metric}")
+
+    
+    print(f"Step 4: Analyzing {len(filtered_pairs)} suspicious pairs...")
+    results = []
+    
+    for comp in tqdm(filtered_pairs, desc="Analyzing pairs", unit="pair"):
+        student1 = comp['student1']
+        student2 = comp['student2']
+        
+        llm_result = None
+        llm_triggered = False
+        verdict = "未抄襲"
+        verdict_reason = ""
+        
+        # Rule 1: Hex max score = 1.0 OR Source avg score = 1.0 → Definite plagiarism, skip LLM
+        if comp['max_hex_sim'] == 1.0 or comp['avg_score'] == 1.0:
+            verdict = "抄襲"
+            verdict_reason = "Hex檔案或原始碼完全相同 (100%)"
+            llm_triggered = False
+
+        # Rule 2: Trigger LLM for ALL suspicious pairs (except definite plagiarism)
+        else:
+            llm_triggered = True
+            # Need to retrieve source code again
+            src1 = student_data[student1]['source']
+            src2 = student_data[student2]['source']
             
+            llm_result = analyze_pair_with_llm(src1, src2)
             
-            # Check for illegal submission - but only override if NOT plagiarized
-            if (student_data[student1]['illegal_submission'] or student_data[student2]['illegal_submission']) and verdict != "抄襲":
-                verdict = "無效提交"
-                illegal_names = []
-                if student_data[student1]['illegal_submission']:
-                    illegal_names.append(student1)
-                if student_data[student2]['illegal_submission']:
-                    illegal_names.append(student2)
-                verdict_reason = f"無效提交: {', '.join(illegal_names)}"
-            
-            results.append({
-                'student1': student1,
-                'student2': student2,
-                'source_similarity': src_sim,
-                'hex_similarity': hex_sim,
-                'max_hex_sim': max_hex_sim,
-                'max_src_sim': max_src_sim,
-                'max_score': current_max,
-                'llm_analysis': llm_result,
-                'llm_triggered': llm_triggered,
-                'final_verdict': verdict,
-                'verdict_reason': verdict_reason,
-                'source_code1': student_data[student1]['source'],
-                'source_code2': student_data[student2]['source'],
-                'original_source1': student_data[student1]['original_source'],
-
-                'original_source2': student_data[student2]['original_source'],
-
-                'illegal_submission1': student_data[student1]['illegal_submission'],
-
-                'illegal_reason1': student_data[student1]['illegal_reason'],
-
-                'illegal_submission2': student_data[student2]['illegal_submission'],
-
-                'illegal_reason2': student_data[student2]['illegal_reason'],
-
-                'hex_code1': hex1,
-
-                'hex_code2': hex2
-
-            })
+            # Rule 3: Use LLM result if available
+            if llm_result and 'is_plagiarized' in llm_result:
+                verdict = "抄襲" if llm_result['is_plagiarized'] else "未抄襲"
+                verdict_reason = f"LLM分析: {llm_result.get('reasoning', 'N/A')}"
+            else:
+                # LLM unavailable, fallback to algorithm
+                verdict = "抄襲" if comp['max_score'] > 0.85 else "未抄襲"
+                verdict_reason = f"LLM分析不可用 - 演算法分析: Hex Max={comp['max_hex_sim']:.2f}, Source Max={comp['max_src_sim']:.2f}"
+        
+        
+        # Check for illegal submission - but only override if NOT plagiarized
+        if (student_data[student1]['illegal_submission'] or student_data[student2]['illegal_submission']) and verdict != "抄襲":
+            verdict = "無效提交"
+            illegal_names = []
+            if student_data[student1]['illegal_submission']:
+                illegal_names.append(student1)
+            if student_data[student2]['illegal_submission']:
+                illegal_names.append(student2)
+            verdict_reason = f"無效提交: {', '.join(illegal_names)}"
+        
+        # Merge comparison data with analysis results
+        result_entry = comp.copy()
+        result_entry.update({
+            'llm_analysis': llm_result,
+            'llm_triggered': llm_triggered,
+            'final_verdict': verdict,
+            'verdict_reason': verdict_reason,
+            'source_code1': student_data[student1]['source'],
+            'source_code2': student_data[student2]['source'],
+            'original_source1': student_data[student1]['original_source'],
+            'original_source2': student_data[student2]['original_source'],
+            'illegal_submission1': student_data[student1]['illegal_submission'],
+            'illegal_reason1': student_data[student1]['illegal_reason'],
+            'illegal_submission2': student_data[student2]['illegal_submission'],
+            'illegal_reason2': student_data[student2]['illegal_reason'],
+            'hex_code1': student_data[student1]['hex'],
+            'hex_code2': student_data[student2]['hex']
+        })
+        
+        results.append(result_entry)
             
 
     # Identify illegal students
@@ -183,31 +256,52 @@ def check_plagiarism(root_path, hex_threshold, src_threshold, lab_name="Lab"):
                 'files': data.get('all_files', [])
             })
 
-    # Sort by max score descending
-    results.sort(key=lambda x: x['max_score'], reverse=True)
+    # Sort by average score descending
+    results.sort(key=lambda x: x['avg_score'], reverse=True)
     
     # Generate Report
-    generate_html_report(results, hex_threshold, src_threshold, illegal_students, lab_name)
+    generate_html_report(results, hex_threshold, src_threshold, illegal_students, lab_name,
+                        filter_mode=filter_mode, top_metric=top_metric, top_percent=top_percent)
     
     return results
 
 
 if __name__ == "__main__":
-    # User can modify these directly
-    lab_name = "Lab 5"
-    hex_threshold = 0.7
-    src_threshold = 0.8
+    # --- Configuration ---
+    LAB_NAME = "Lab test"
+    
+    # Filter Configuration
+    # Options: "threshold", "top_percent"
+    FILTER_MODE = "threshold"  
+    
+    # Mode 1: Threshold (Existing)
+    HEX_THRESHOLD = 0.7
+    SRC_THRESHOLD = 0.8
+
+    # Mode 2: Top Percent (New)
+    # Options: "token_seq", "levenshtein", "avg_score"
+    TOP_METRIC = "avg_score"   
+    TOP_PERCENT = 0.05         # Top 5% of pairs
+    # ---------------------
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     root_path = os.path.join(repo_root, 'Lab 5')
     print(f"\nProcessing root path: {root_path}")
 
-    results = check_plagiarism(root_path, hex_threshold, src_threshold, lab_name)
+    results = check_plagiarism(
+        root_path, 
+        filter_mode=FILTER_MODE,
+        hex_threshold=HEX_THRESHOLD, 
+        src_threshold=SRC_THRESHOLD,
+        top_metric=TOP_METRIC,
+        top_percent=TOP_PERCENT,
+        lab_name=LAB_NAME
+    )
     
 
     print(f"\nFound {len(results)} suspicious pairs.")
     # for res in results[:5]:
     #     print(f"{res['student1']} vs {res['student2']}")
     #     print(f"  Source: {res['source_similarity']}")
-    #     print(f"  Hex: {res['hex_similarity']}")
+    #     print(f"  Hex: {res['hex_levenshtein']}")
 

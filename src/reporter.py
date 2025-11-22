@@ -1,8 +1,10 @@
 """HTML reporter (moved to src root)."""
 import os
 import html
+import json
 
-def generate_html_report(results, hex_threshold, src_threshold, illegal_students=[], lab_name="Lab"):
+def generate_html_report(results, hex_threshold, src_threshold, illegal_students=[], lab_name="Lab", 
+                        filter_mode="threshold", top_metric="max_score", top_percent=0.05):
     """
     Generates an HTML report from the plagiarism results.
     """
@@ -13,6 +15,12 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
     os.makedirs(reports_dir, exist_ok=True)
     output_file = os.path.join(reports_dir, f"{lab_name.replace(' ', '')}_plagiarism_report.html")
     
+    # Format filter description
+    if filter_mode == "threshold":
+        filter_desc = f"Threshold Mode (Hex > {hex_threshold}, Source > {src_threshold})"
+    else:
+        filter_desc = f"Top Percent Mode (Top {top_percent*100}% by {top_metric})"
+
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
@@ -80,15 +88,27 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 font-weight: bold;
                 text-align: center;
             }}
+            
+            .filter-info {{
+                background-color: #e8f4f8;
+                padding: 10px;
+                border-radius: 4px;
+                margin-bottom: 15px;
+                border: 1px solid #bde0fe;
+                color: #2c3e50;
+            }}
         </style>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     </head>
     <body>
         <div class="container">
             <h1>{lab_name} - 程式碼比對報告</h1>
-            <p>Total Suspicious Pairs: <strong>{total_pairs}</strong></p>
+            <div class="filter-info">
+                <strong>篩選機制:</strong> {filter_desc} | 
+                <strong>Total Suspicious Pairs:</strong> {total_pairs}
+            </div>
             
-    """.format(lab_name=lab_name, total_pairs=len(results))
+    """.format(lab_name=lab_name, total_pairs=len(results), filter_desc=filter_desc)
     
     # Add explanation section
     html_content += """
@@ -100,32 +120,20 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; margin-top: 10px;">
                         
                         <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h4 style="color: #3498db; margin-top: 0;">🔷 Jaccard Similarity (集合相似度)</h4>
-                            <p><strong>原理：</strong>比較兩個集合的交集與聯集的比例</p>
+                            <h4 style="color: #27ae60; margin-top: 0;">🔷 Token Sequence Similarity (LCS)</h4>
+                            <p><strong>原理：</strong>將程式碼視為 Token 序列，計算最長公共子序列 (Longest Common Subsequence)。</p>
                             <p><strong>特性：</strong></p>
                             <ul style="margin: 5px 0; padding-left: 20px;">
-                                <li>✅ 對順序不敏感</li>
-                                <li>✅ 適合偵測複製貼上後重新排列的抄襲</li>
-                                <li>❌ 對小幅修改敏感</li>
+                                <li>✅ 順序敏感 - 專注於程式執行流程</li>
+                                <li>✅ 允許插入 - 可偵測中間插入無關程式碼</li>
+                                <li>✅ 結構導向 - 專注於指令序列而非文字</li>
                             </ul>
-                            <p><strong>適用情境：</strong>學生把程式碼片段打亂順序</p>
+                            <p><strong>適用情境：</strong>改了變數名稱但保持相同的程式邏輯</p>
                         </div>
                         
                         <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h4 style="color: #e67e22; margin-top: 0;">🔶 Cosine Similarity (餘弦相似度)</h4>
-                            <p><strong>原理：</strong>將文字轉換成向量，計算兩個向量之間的夾角</p>
-                            <p><strong>特性：</strong></p>
-                            <ul style="margin: 5px 0; padding-left: 20px;">
-                                <li>✅ 對文件長度不敏感</li>
-                                <li>✅ 考慮詞彙的重要性</li>
-                                <li>✅ 適合偵測邏輯結構相似但實作細節不同</li>
-                            </ul>
-                            <p><strong>適用情境：</strong>改了變數名稱和註解，但演算法一樣</p>
-                        </div>
-                        
-                        <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h4 style="color: #27ae60; margin-top: 0;">🔸 Levenshtein Distance (編輯距離)</h4>
-                            <p><strong>原理：</strong>計算將一個字串轉換成另一個字串所需的最少編輯次數</p>
+                            <h4 style="color: #e74c3c; margin-top: 0;">🔶 Levenshtein Distance (編輯距離)</h4>
+                            <p><strong>原理：</strong>計算將一個字串轉換為另一個字串所需的最少編輯次數（插入、刪除、替換）。</p>
                             <p><strong>特性：</strong></p>
                             <ul style="margin: 5px 0; padding-left: 20px;">
                                 <li>✅ 順序敏感</li>
@@ -137,13 +145,8 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                     </div>
                     
                     <div style="margin-top: 15px; padding: 10px; background: #fff3cd; border-radius: 4px;">
-                        <strong>💡 為什麼使用三種演算法？</strong>
-                        <p style="margin: 5px 0;">不同的抄襲手法會在不同的演算法中顯示高相似度。系統取三者的最大值作為判斷依據，以捕捉各種抄襲模式：</p>
-                        <ul style="margin: 5px 0; padding-left: 20px;">
-                            <li><strong>Jaccard 高、Levenshtein 低</strong> → 可能是重新排列程式碼</li>
-                            <li><strong>Cosine 高、Jaccard 低</strong> → 可能是改寫但邏輯相同</li>
-                            <li><strong>Levenshtein 高</strong> → 可能是幾乎完全複製</li>
-                        </ul>
+                        <strong>💡 為什麼使用多種演算法？</strong>
+                        <p style="margin: 5px 0;">不同的抄襲手法會在不同的演算法中顯示高相似度。系統綜合這些分數作為判斷依據，以捕捉各種抄襲模式。</p>
                     </div>
                 </div>
             </div>
@@ -216,6 +219,8 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
     
     
     # Sort results by verdict priority: 抄襲 > 非法提交 > 未抄襲
+    # Sort results by verdict priority: 抄襲 > 非法提交 > 未抄襲
+    # Always sort by verdict priority first, then by score (which is already sorted in results)
     def verdict_priority(res):
         verdict = res.get('final_verdict', '未知')
         if verdict == '抄襲':
@@ -227,19 +232,50 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
         else:
             return 3
     
+    # Python's sort is stable, so it preserves the score order for items with same verdict
     sorted_results = sorted(results, key=verdict_priority)
+    
+    # Generate description text based on filter mode
+    if filter_mode == "threshold":
+        description_text = f"Hex 任一相似度分數 >= {hex_threshold} 或 原始碼平均相似度分數 >= {src_threshold}"
+    else:  # top_percent
+        metric_name_map = {
+            "token_seq": "Token Sequence",
+            "levenshtein": "Levenshtein",
+            "avg_score": "平均分數"
+        }
+        metric_display = metric_name_map.get(top_metric, top_metric)
+        description_text = f"依據 {metric_display} 排序，取前 {top_percent*100}% 的配對組合"
     
     html_content += f"""
             <h2 style="margin-top: 30px;">詳細比對列表 ({len(sorted_results)} 組)</h2>
-            <p style="color: #666;">Hex 任一相似度分數 >= {hex_threshold} 或 原始碼任一相似度分數 >= {src_threshold}</p>
+            <p style="color: #666;">{description_text}</p>
+    """
+    
+    # Determine table headers based on filter mode
+    hex_header = "Hex Max"
+    src_header = "Average Score"
+    
+    if filter_mode == "top_percent":
+        if top_metric == "token_seq":
+            src_header = "Source (Token Seq)"
+            hex_header = "Hex (Levenshtein)"
+        elif top_metric == "levenshtein":
+            src_header = "Source (Levenshtein)"
+            hex_header = "Hex (Levenshtein)"
+        elif top_metric == "avg_score":
+            src_header = "Average Score"
+            hex_header = "Hex (Levenshtein)"
+            
+    html_content += f"""
             <table>
                 <thead>
                     <tr>
                         <th>Rank</th>
                         <th>Student 1</th>
                         <th>Student 2</th>
-                        <th>Hex Max</th>
-                        <th>Source Max</th>
+                        <th>{hex_header}</th>
+                        <th>{src_header}</th>
                         <th>最終判定</th>
                         <th>Details</th>
                     </tr>
@@ -250,7 +286,19 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
     
     for i, res in enumerate(sorted_results):
         hex_comp = res.get('max_hex_sim', 0)
-        src_comp = res.get('max_src_sim', 0)
+        src_comp = res.get('avg_score', 0) # Default to average score
+        
+        # Override displayed scores if in top_percent mode with specific metric
+        if filter_mode == "top_percent":
+            if top_metric == "token_seq":
+                src_comp = res['source_similarity']['token_seq']
+                hex_comp = res.get('hex_levenshtein', 0)
+            elif top_metric == "levenshtein":
+                src_comp = res['source_similarity']['levenshtein']
+                hex_comp = res.get('hex_levenshtein', 0)
+            elif top_metric == "avg_score":
+                src_comp = res.get('avg_score', 0)
+                hex_comp = res.get('hex_levenshtein', 0)
         verdict = res.get('final_verdict', '未知')
         
         # Color coding for verdict
@@ -286,17 +334,26 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
         ill2 = "true" if res.get('illegal_submission2') else "false"
         reason2 = html.escape(res.get('illegal_reason2', ''))
         
-        # JSON data for chart
+        # JSON data for chart - restructured format
         chart_data = {
-            'source': [res['source_similarity']['jaccard'], res['source_similarity']['cosine'], res['source_similarity']['levenshtein']],
-            'hex': [res['hex_similarity']['jaccard'], res['hex_similarity']['cosine'], res['hex_similarity']['levenshtein']]
+            'token_seq': [res['source_similarity']['token_seq'], 0],
+            'levenshtein': [res['source_similarity']['levenshtein'], res['hex_levenshtein']]
         }
-        import json
         chart_json = html.escape(json.dumps(chart_data))
         
-        # Format scores with bold if exceeding threshold
-        hex_display = f"<strong>{hex_comp:.2f}</strong>" if hex_comp > hex_threshold else f"{hex_comp:.2f}"
-        src_display = f"<strong>{src_comp:.2f}</strong>" if src_comp > src_threshold else f"{src_comp:.2f}"
+        # Format scores with bold based on filter mode
+        if filter_mode == "threshold":
+            # Threshold mode: bold if exceeding threshold
+            hex_display = f"<strong>{hex_comp:.2f}</strong>" if hex_comp > hex_threshold else f"{hex_comp:.2f}"
+            src_display = f"<strong>{src_comp:.2f}</strong>" if src_comp > src_threshold else f"{src_comp:.2f}"
+        else:  # top_percent mode
+            # Top percent mode: bold top N% entries (based on rank)
+            top_n = int(len(sorted_results) * top_percent)
+            if top_n < 1:
+                top_n = 1
+            is_top = (i < top_n)
+            hex_display = f"<strong>{hex_comp:.2f}</strong>" if is_top else f"{hex_comp:.2f}"
+            src_display = f"<strong>{src_comp:.2f}</strong>" if is_top else f"{src_comp:.2f}"
         
         row = f"""
             <tr onclick="openModal('{i}')">
@@ -331,7 +388,7 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
             </table>
     """
 
-    html_content += """
+    html_content += r"""
         </div>
         
         <!-- Modal -->
@@ -377,11 +434,30 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
         </div>
 
         <script>
+            function removeComments(code) {
+                // Remove assembly comments (;)
+                code = code.replace(/;.*/g, '');
+                
+                // Remove C++ style comments (//)
+                code = code.replace(/\/\/.*/g, '');
+                
+                // Remove C style block comments (/* */)
+                code = code.replace(/\/\*[\s\S]*?\*\//g, '');
+                
+                // Remove empty lines and trim
+                code = code.split('\n')
+                    .map(line => line.trim())
+                    .filter(line => line.length > 0)
+                    .join('\n');
+                
+                return code;
+            }
+            
             function generateLineNumbers(text) {
-                const lines = text.split('\\n').length;
+                const lines = text.split('\n').length;
                 let nums = "";
                 for(let i=1; i<=lines; i++) {
-                    nums += i + "\\n";
+                    nums += i + "\n";
                 }
                 return nums;
             }
@@ -393,8 +469,12 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 document.getElementById('s1-name').innerText = data.querySelector('.student1').innerText;
                 document.getElementById('s2-name').innerText = data.querySelector('.student2').innerText;
                 
-                const code1 = data.querySelector('.code1').innerText;
-                const code2 = data.querySelector('.code2').innerText;
+                const code1Raw = data.querySelector('.code1').innerText;
+                const code2Raw = data.querySelector('.code2').innerText;
+                
+                // Remove comments from code before displaying
+                const code1 = removeComments(code1Raw);
+                const code2 = removeComments(code2Raw);
                 
                 document.getElementById('code1-view').innerText = code1;
                 document.getElementById('code2-view').innerText = code2;
@@ -457,20 +537,20 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 myChart = new Chart(ctx, {
                     type: 'bar',
                     data: {
-                        labels: ['Jaccard', 'Cosine', 'Levenshtein'],
+                        labels: ['Source Code', 'Hex Data'],
                         datasets: [
                             {
-                                label: 'Source Code Similarity',
-                                data: chartData.source,
-                                backgroundColor: 'rgba(52, 152, 219, 0.6)',
-                                borderColor: 'rgba(52, 152, 219, 1)',
+                                label: 'Token Sequence',
+                                data: chartData.token_seq,
+                                backgroundColor: 'rgba(243, 156, 18, 0.7)',  // Orange
+                                borderColor: 'rgba(243, 156, 18, 1)',
                                 borderWidth: 1
                             },
                             {
-                                label: 'Hex Data Similarity',
-                                data: chartData.hex,
-                                backgroundColor: 'rgba(255, 159, 64, 0.6)',
-                                borderColor: 'rgba(255, 159, 64, 1)',
+                                label: 'Levenshtein',
+                                data: chartData.levenshtein,
+                                backgroundColor: 'rgba(52, 152, 219, 0.7)',  // Blue
+                                borderColor: 'rgba(52, 152, 219, 1)',
                                 borderWidth: 1
                             }
                         ]
@@ -486,12 +566,22 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                                     display: true,
                                     text: 'Similarity Score'
                                 }
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Comparison Type'
+                                }
                             }
                         },
                         plugins: {
                             title: {
                                 display: true,
                                 text: 'Similarity Metrics Comparison'
+                            },
+                            legend: {
+                                display: true,
+                                position: 'top'
                             }
                         }
                     }

@@ -61,29 +61,43 @@ def clean_code(content, file_extension):
     # Convert to lowercase for case-insensitive comparison
     content = content.lower()
     
+    # Normalize hex immediates: 0x?? -> ??h
+    # This matches 0x followed by hex digits and converts to hex digits + h
+    content = re.sub(r'0x([0-9a-f]+)', r'\1h', content)
+    
+    # Strip leading zeros from hex values ending in h (e.g. 012h -> 12h, 0ah -> ah)
+    # But preserve single 0 (0h -> 0h)
+    content = re.sub(r'\b0+([0-9a-f]+h)', r'\1', content)
+    
     return content.strip()
 
 def normalize_hex(content):
     """
     Parses Intel HEX format, extracts data payload.
-    Ignores checksums, addresses, and record types to focus on data.
+    Returns: (data_payload, hex_info)
+        - data_payload: extracted hex data
+        - hex_info: dict with validation information
     """
     data_payload = ""
     lines = content.splitlines()
+    has_eof = False
+    format_errors = []
+    valid_lines = 0
     
-    for line in lines:
+    for line_num, line in enumerate(lines, 1):
         line = line.strip()
+        if not line:
+            continue
         if not line.startswith(':'):
+            format_errors.append(f"Line {line_num}: Missing ':' prefix")
             continue
             
         # Intel HEX format: :LLAAAATT[DD...]CC
-        # LL = Length (2 hex chars)
-        # AAAA = Address (4 hex chars)
-        # TT = Type (2 hex chars)
-        # DD = Data (LL * 2 hex chars)
-        # CC = Checksum (2 hex chars)
-        
         try:
+            if len(line) < 11:  # Minimum valid line length
+                format_errors.append(f"Line {line_num}: Line too short")
+                continue
+                
             byte_count = int(line[1:3], 16)
             record_type = int(line[7:9], 16)
             
@@ -91,9 +105,188 @@ def normalize_hex(content):
             if record_type == 0:
                 data_start = 9
                 data_end = 9 + (byte_count * 2)
+                if len(line) < data_end + 2:  # +2 for checksum
+                    format_errors.append(f"Line {line_num}: Data length mismatch")
+                    continue
                 data = line[data_start:data_end]
                 data_payload += data
-        except ValueError:
+                valid_lines += 1
+            # Record Type 01 is EOF
+            elif record_type == 1:
+                has_eof = True
+        except (ValueError, IndexError) as e:
+            format_errors.append(f"Line {line_num}: Parse error - {str(e)}")
             continue
-            
-    return data_payload.lower()
+    
+    hex_info = {
+        'has_eof': has_eof,
+        'format_errors': format_errors,
+        'valid_lines': valid_lines,
+        'data_length': len(data_payload)
+    }
+    
+    return data_payload.lower(), hex_info
+
+
+def validate_source_code(content, file_extension):
+    """
+    Validates assembly source code quality.
+    Returns: list of anomalies
+    """
+    anomalies = []
+    
+    if file_extension not in ['.a51', '.asm']:
+        return anomalies
+    
+    lines = content.splitlines()
+    total_lines = len(lines)
+    
+    if total_lines == 0:
+        anomalies.append({
+            'code': 'EMPTY_FILE',
+            'severity': 'error',
+            'message': '原始碼檔案為空'
+        })
+        return anomalies
+    
+    # Count different line types
+    blank_lines = 0
+    comment_lines = 0
+    code_lines = 0
+    instructions = []
+    
+    # Key assembly instructions to look for
+    key_instructions = ['org', 'end', 'mov', 'jmp', 'call', 'ret']
+    found_instructions = set()
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if not stripped:
+            blank_lines += 1
+        elif stripped.startswith(';'):
+            comment_lines += 1
+        else:
+            code_lines += 1
+            # Extract instruction (first word)
+            parts = stripped.lower().split()
+            if parts:
+                instr = parts[0].rstrip(':')  # Remove label colon
+                instructions.append(instr)
+                if instr in key_instructions:
+                    found_instructions.add(instr)
+    
+    # Check 1: Minimum instruction count
+    if len(instructions) < 10:
+        anomalies.append({
+            'code': 'FEW_INSTRUCTIONS',
+            'severity': 'warning',
+            'message': f'指令數量過少 ({len(instructions)} 條)',
+            'details': {'count': len(instructions)}
+        })
+    
+    # Check 2: Key instructions existence
+    if 'org' not in found_instructions:
+        anomalies.append({
+            'code': 'NO_ORG',
+            'severity': 'warning',
+            'message': '缺少 ORG 指令'
+        })
+    
+    if 'end' not in found_instructions:
+        anomalies.append({
+            'code': 'NO_END',
+            'severity': 'warning',
+            'message': '缺少 END 指令'
+        })
+    
+    # Check 3: Comment ratio
+    if total_lines > 0:
+        comment_ratio = comment_lines / total_lines
+        if comment_ratio > 0.8:
+            anomalies.append({
+                'code': 'HIGH_COMMENT_RATIO',
+                'severity': 'warning',
+                'message': f'註解比例過高 ({comment_ratio*100:.1f}%)',
+                'details': {'ratio': comment_ratio}
+            })
+    
+    # Check 4: Blank line ratio
+    if total_lines > 0:
+        blank_ratio = blank_lines / total_lines
+        if blank_ratio > 0.5:
+            anomalies.append({
+                'code': 'HIGH_BLANK_RATIO',
+                'severity': 'warning',
+                'message': f'空白行比例過高 ({blank_ratio*100:.1f}%)',
+                'details': {'ratio': blank_ratio}
+            })
+    
+    # Check 5: Effective code lines
+    if code_lines < 5:
+        anomalies.append({
+            'code': 'FEW_CODE_LINES',
+            'severity': 'error',
+            'message': f'有效程式碼行數過少 ({code_lines} 行)',
+            'details': {'count': code_lines}
+        })
+    
+    return anomalies
+
+
+def check_hex_integrity(hex_info, hex_length, median_length):
+    """
+    Checks hex file integrity based on validation info.
+    Returns: list of anomalies
+    """
+    anomalies = []
+    
+    # Check 1: EOF marker
+    if not hex_info['has_eof']:
+        anomalies.append({
+            'code': 'NO_EOF',
+            'severity': 'warning',
+            'message': '缺少 EOF 標記'
+        })
+    
+    # Check 2: Format errors
+    if hex_info['format_errors']:
+        error_count = len(hex_info['format_errors'])
+        anomalies.append({
+            'code': 'FORMAT_ERRORS',
+            'severity': 'error',
+            'message': f'格式錯誤 ({error_count} 處)',
+            'details': {'errors': hex_info['format_errors'][:5]}  # First 5 errors
+        })
+    
+    # Check 3: Length check (median ± 25%)
+    if median_length > 0:
+        lower_threshold = median_length * 0.75
+        upper_threshold = median_length * 1.25
+        
+        if hex_length < lower_threshold:
+            anomalies.append({
+                'code': 'SHORT_LENGTH',
+                'severity': 'warning',
+                'message': f'長度過短 ({hex_length}，中位數{int(median_length)})',
+                'details': {'length': hex_length, 'median': median_length}
+            })
+        elif hex_length > upper_threshold:
+            anomalies.append({
+                'code': 'LONG_LENGTH',
+                'severity': 'warning',
+                'message': f'長度過長 ({hex_length}，中位數{int(median_length)})',
+                'details': {'length': hex_length, 'median': median_length}
+            })
+    
+    # Check 4: Minimum data
+    if hex_length < 20:
+        anomalies.append({
+            'code': 'INSUFFICIENT_DATA',
+            'severity': 'error',
+            'message': f'資料量不足 ({hex_length} 字元)',
+            'details': {'length': hex_length}
+        })
+    
+    return anomalies
+

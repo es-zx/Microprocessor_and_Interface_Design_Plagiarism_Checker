@@ -1,57 +1,72 @@
 """Detector utilities (moved to src root)."""
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 import Levenshtein
 
-def generate_ngrams(text, n=3):
+def tokenize_code(text):
     """
-    Generates n-grams from text.
-    Returns a set of n-grams.
+    Split code into tokens (words/instructions).
+    Simple whitespace-based tokenization.
     """
     if not text:
-        return set()
-    
-    # Simple character-based n-grams for code might be better than word-based
-    # depending on how "clean" the code is. 
-    # Let's use word-based first as we cleaned the code.
-    words = text.split()
-    if len(words) < n:
-        return set([text]) # Return the whole text if shorter than n
-        
-    ngrams = zip(*[words[i:] for i in range(n)])
-    return set([" ".join(ngram) for ngram in ngrams])
+        return []
+    return text.split()
 
-def calculate_jaccard_similarity(text1, text2, n=3):
+def lcs_length(tokens1, tokens2):
     """
-    Calculates Jaccard similarity based on n-grams.
-    """
-    set1 = generate_ngrams(text1, n)
-    set2 = generate_ngrams(text2, n)
+    Calculate Longest Common Subsequence length using dynamic programming.
     
-    if not set1 and not set2:
+    Args:
+        tokens1, tokens2: Lists of tokens to compare
+    
+    Returns:
+        Length of the longest common subsequence
+    """
+    if not tokens1 or not tokens2:
+        return 0
+    
+    m, n = len(tokens1), len(tokens2)
+    
+    # Create DP table
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    
+    # Fill DP table
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            if tokens1[i-1] == tokens2[j-1]:
+                dp[i][j] = dp[i-1][j-1] + 1
+            else:
+                dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+    
+    return dp[m][n]
+
+def calculate_token_sequence_similarity(text1, text2):
+    """
+    Calculate similarity based on Longest Common Subsequence ratio.
+    
+    Similarity = 2 * LCS_length / (len(seq1) + len(seq2))
+    
+    Args:
+        text1, text2: Texts to compare
+    
+    Returns:
+        Similarity score between 0.0 and 1.0
+    """
+    if not text1 and not text2:
         return 1.0
-    if not set1 or not set2:
-        return 0.0
-        
-    intersection = len(set1.intersection(set2))
-    union = len(set1.union(set2))
-    
-    return intersection / union
-
-def calculate_cosine_similarity(text1, text2):
-    """
-    Calculates Cosine similarity using CountVectorizer.
-    """
     if not text1 or not text2:
         return 0.0
-        
-    try:
-        vectorizer = CountVectorizer().fit_transform([text1, text2])
-        vectors = vectorizer.toarray()
-        return cosine_similarity(vectors)[0][1]
-    except ValueError:
-        # Handle cases where text might be empty or stop words only
+    
+    tokens1 = tokenize_code(text1)
+    tokens2 = tokenize_code(text2)
+    
+    if not tokens1 and not tokens2:
+        return 1.0
+    if not tokens1 or not tokens2:
         return 0.0
+    
+    lcs_len = lcs_length(tokens1, tokens2)
+    total_len = len(tokens1) + len(tokens2)
+    
+    return (2.0 * lcs_len) / total_len if total_len > 0 else 0.0
 
 def calculate_levenshtein_similarity(text1, text2):
     """
@@ -68,9 +83,10 @@ def calculate_levenshtein_similarity(text1, text2):
 def calculate_combined_similarity(text1, text2):
     """
     Returns a dictionary of similarity scores.
+    Now only uses Token Sequence Similarity and Levenshtein Distance.
+    Winnowing has been removed.
     """
     return {
-        'jaccard': calculate_jaccard_similarity(text1, text2),
-        'cosine': calculate_cosine_similarity(text1, text2),
+        'token_seq': calculate_token_sequence_similarity(text1, text2),
         'levenshtein': calculate_levenshtein_similarity(text1, text2)
     }
