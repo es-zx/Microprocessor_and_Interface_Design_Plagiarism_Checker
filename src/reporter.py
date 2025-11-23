@@ -440,13 +440,11 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
             hex_display = f"<strong>{hex_comp:.2f}</strong>" if hex_comp > hex_threshold else f"{hex_comp:.2f}"
             src_display = f"<strong>{src_comp:.2f}</strong>" if src_comp > src_threshold else f"{src_comp:.2f}"
         else:  # top_percent mode
-            # Top percent mode: bold top N% entries (based on rank)
-            top_n = int(len(sorted_results) * top_percent)
-            if top_n < 1:
-                top_n = 1
-            is_top = (i < top_n)
-            hex_display = f"<strong>{hex_comp:.2f}</strong>" if is_top else f"{hex_comp:.2f}"
-            src_display = f"<strong>{src_comp:.2f}</strong>" if is_top else f"{src_comp:.2f}"
+            # Top percent mode: ALL results are already the top N% selected by main.py
+            # So we bold all source scores (since they were selected based on source metrics)
+            # Hex is never bolded because selection is not based on hex
+            hex_display = f"{hex_comp:.2f}"  # Never bold hex in top_percent mode
+            src_display = f"<strong>{src_comp:.2f}</strong>"  # All source scores are bold
         
         row = f"""
             <tr onclick="openModal('{i}')">

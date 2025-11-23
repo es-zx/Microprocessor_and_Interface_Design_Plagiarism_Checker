@@ -2,7 +2,7 @@ import os
 import itertools
 from tqdm import tqdm
 from preprocessor import crawl_directory, clean_code, normalize_hex, validate_source_code, check_hex_integrity
-from detector import calculate_combined_similarity
+from detector import calculate_combined_similarity, calculate_levenshtein_similarity
 from llm_analyzer import analyze_pair_with_llm
 from reporter import generate_html_report
 from c51_compiler import compile_and_extract_asm, find_keil_c51
@@ -225,15 +225,10 @@ def check_plagiarism(root_path, filter_mode="threshold",
         hex2 = student_data[student2]['hex']
         hex_lev = 0
         if hex1 and hex2:
-            from detector import calculate_levenshtein_similarity
             hex_lev = calculate_levenshtein_similarity(hex1, hex2)
    
         # Calculate scores
-        max_src_sim = max(src_sim.values()) if src_sim else 0
         max_hex_sim = hex_lev
-        
-        # Average Score = Average of Token Seq + Levenshtein (Source only)
-        # There are 2 metrics now
         avg_score = (src_sim['token_seq'] + src_sim['levenshtein']) / 2.0
         
         # Store all data for filtering
@@ -243,7 +238,6 @@ def check_plagiarism(root_path, filter_mode="threshold",
             'source_similarity': src_sim,
             'hex_levenshtein': hex_lev,
             'max_hex_sim': max_hex_sim,
-            'max_src_sim': max_src_sim,
             'avg_score': avg_score
         })
 
@@ -313,7 +307,7 @@ def check_plagiarism(root_path, filter_mode="threshold",
             else:
                 # LLM unavailable, fallback to algorithm
                 verdict = "抄襲" if comp['avg_score'] > 0.85 else "未抄襲"
-                verdict_reason = f"LLM分析不可用 - 演算法分析: Hex Max={comp['max_hex_sim']:.2f}, Source Max={comp['max_src_sim']:.2f}"
+                verdict_reason = f"LLM分析不可用 - 演算法分析: Hex={comp['max_hex_sim']:.2f}, Source Avg={comp['avg_score']:.2f}"
         
         
         # Check for illegal submission - but only override if NOT plagiarized
@@ -386,28 +380,28 @@ def check_plagiarism(root_path, filter_mode="threshold",
 
 if __name__ == "__main__":
     # --- Configuration ---
-    LAB_NAME = "Lab testss"
+    LAB_NAME = "Lab 6"
     
     # Filter Configuration
     # Options: "threshold", "top_percent"
-    FILTER_MODE = "threshold"  
+    FILTER_MODE = "top_percent"  
     
     # Mode 1: Threshold (Existing)
     HEX_THRESHOLD = 0.7
-    SRC_THRESHOLD = 0.8
+    SRC_THRESHOLD = 0.6
 
     # Mode 2: Top Percent (New)
     # Options: "token_seq", "levenshtein", "avg_score"
-    TOP_METRIC = "token_seq"   
+    TOP_METRIC = "avg_score"   
     TOP_PERCENT = 0.05         # Top 5% of pairs
     
     # C51 Compilation Configuration
-    USE_KEIL_COMPILATION = True  # Set to True to enable C compilation
+    USE_KEIL_COMPILATION = False  # Set to True to enable C compilation
     KEIL_PATH = None              # Set path if not in default locations
     # ---------------------
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
-    root_path = os.path.join(repo_root, 'Lab 5')
+    root_path = os.path.join(repo_root, 'Lab 6')
     print(f"\nProcessing root path: {root_path}")
 
     results = check_plagiarism(
@@ -424,8 +418,3 @@ if __name__ == "__main__":
     
 
     print(f"\nFound {len(results)} suspicious pairs.")
-    # for res in results[:5]:
-    #     print(f"{res['student1']} vs {res['student2']}")
-    #     print(f"  Source: {res['source_similarity']}")
-    #     print(f"  Hex: {res['hex_levenshtein']}")
-
