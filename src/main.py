@@ -5,12 +5,13 @@ from preprocessor import crawl_directory, clean_code, normalize_hex, validate_so
 from detector import calculate_combined_similarity
 from llm_analyzer import analyze_pair_with_llm
 from reporter import generate_html_report
+from c51_compiler import compile_and_extract_asm, find_keil_c51
 
 
 def check_plagiarism(root_path, filter_mode="threshold", 
                     hex_threshold=0.7, src_threshold=0.8, 
                     top_metric="max_score", top_percent=0.05,
-                    lab_name="Lab"):
+                    lab_name="Lab", use_keil_compilation=False, keil_path=None):
 
     """
     Main function to check plagiarism.
@@ -25,6 +26,7 @@ def check_plagiarism(root_path, filter_mode="threshold",
             'source': "", 
             'hex': "", 
             'original_source': "", 
+            'asm_source': "",         # Compiled assembly or raw assembly
             'illegal_submission': False, 
             'illegal_reason': "",
             'hex_anomalies': [],      # List of hex anomalies
@@ -34,19 +36,36 @@ def check_plagiarism(root_path, filter_mode="threshold",
             'hex_info': {}            # Hex validation info
         }
         
-        # Check for illegal submission (no source files or no hex files)
-        if not files['source']:
+        # Check for illegal submission (no valid source files or no hex files)
+        # Determine valid extensions based on configuration
+        valid_extensions = ['.a51', '.asm']
+        if use_keil_compilation:
+            valid_extensions.append('.c')
+            
+        has_valid_source = False
+        for src_file in files['source']:
+            ext = os.path.splitext(src_file)[1].lower()
+            if ext in valid_extensions:
+                has_valid_source = True
+                break
+                
+        if not has_valid_source:
             student_data[student]['illegal_submission'] = True
             if files['all_files']:
                 # Found files but not valid source
                 exts = set([os.path.splitext(f)[1] for f in files['all_files']])
-                student_data[student]['illegal_reason'] = f"無效提交：找到 {', '.join(exts)} 檔案，但需要 .a51 檔案"
+                student_data[student]['illegal_reason'] = f"無效提交：找到 {', '.join(exts)} 檔案，但需要 {', '.join(valid_extensions)} 檔案"
             else:
                 student_data[student]['illegal_reason'] = "未找到任何檔案"
         
         # Combine all source files
         full_source = ""
+        full_asm_source = ""  # For compiled assembly from C files
         full_original_source = ""
+        
+        c_files_for_compilation = []  # Track C files to compile if needed
+        asm_files_content = []  # Track regular assembly files
+
         for src_file in files['source']:
             try:
                 with open(src_file, 'r', encoding='utf-8', errors='ignore') as f:
@@ -56,7 +75,14 @@ def check_plagiarism(root_path, filter_mode="threshold",
                     # Store original content with filename header for display
                     filename = os.path.basename(src_file)
                     full_original_source += f"--- {filename} ---\n{content}\n\n"  
-                    full_source += clean_code(content, ext) + " "
+                    
+                    if ext in ['.c']:
+                        full_source += clean_code(content, ext) + " "
+                        if use_keil_compilation:
+                            c_files_for_compilation.append(src_file)
+                    elif ext in ['.a51', '.asm']:
+                        full_source += clean_code(content, ext) + " "
+                        asm_files_content.append(content)
                     
                     # Validate source code quality
                     anomalies = validate_source_code(content, ext)
@@ -64,7 +90,23 @@ def check_plagiarism(root_path, filter_mode="threshold",
             except Exception as e:
                 print(f"Error reading {src_file}: {e}")      
 
+        # If we need to compile C to assembly
+        if use_keil_compilation and c_files_for_compilation:
+            print(f"Compiling C files to assembly for student {student}...")
+            for c_file in c_files_for_compilation:
+                success, asm_code, error = compile_and_extract_asm(c_file, keil_path)
+                if success:
+                    full_asm_source += asm_code + " "
+                    # print(f"  Successfully compiled {c_file} to assembly")
+                else:
+                    print(f"  Failed to compile {c_file}: {error}")
+
+        # Add regular assembly files to asm_source as well
+        for asm_content in asm_files_content:
+            full_asm_source += clean_code(asm_content, '.a51') + " "
+
         student_data[student]['source'] = full_source.strip()
+        student_data[student]['asm_source'] = full_asm_source.strip()
         student_data[student]['original_source'] = full_original_source.strip()
         
         # Combine all hex files and collect validation info
@@ -143,8 +185,13 @@ def check_plagiarism(root_path, filter_mode="threshold",
 
     for student1, student2 in tqdm(pairs, desc="Calculating pairs", unit="pair"):
         # Source comparison
-        src1 = student_data[student1]['source']
-        src2 = student_data[student2]['source']
+        if use_keil_compilation:
+            src1 = student_data[student1]['asm_source']
+            src2 = student_data[student2]['asm_source']
+        else:
+            src1 = student_data[student1]['source']
+            src2 = student_data[student2]['source']
+            
         src_sim = {'token_seq': 0, 'levenshtein': 0}
 
         if src1 and src2:
@@ -272,8 +319,11 @@ def check_plagiarism(root_path, filter_mode="threshold",
             'illegal_reason1': student_data[student1]['illegal_reason'],
             'illegal_submission2': student_data[student2]['illegal_submission'],
             'illegal_reason2': student_data[student2]['illegal_reason'],
+            'illegal_reason2': student_data[student2]['illegal_reason'],
             'hex_code1': student_data[student1]['hex'],
-            'hex_code2': student_data[student2]['hex']
+            'hex_code2': student_data[student2]['hex'],
+            'asm_source1': student_data[student1]['asm_source'],
+            'asm_source2': student_data[student2]['asm_source']
         })
         
         results.append(result_entry)
@@ -306,7 +356,8 @@ def check_plagiarism(root_path, filter_mode="threshold",
     
     # Generate Report
     generate_html_report(results, hex_threshold, src_threshold, illegal_students, anomaly_students, lab_name,
-                        filter_mode=filter_mode, top_metric=top_metric, top_percent=top_percent)
+                        filter_mode=filter_mode, top_metric=top_metric, top_percent=top_percent,
+                        use_keil_compilation=use_keil_compilation)
     
     return results
 
@@ -327,6 +378,10 @@ if __name__ == "__main__":
     # Options: "token_seq", "levenshtein", "avg_score"
     TOP_METRIC = "avg_score"   
     TOP_PERCENT = 0.05         # Top 5% of pairs
+    
+    # C51 Compilation Configuration
+    USE_KEIL_COMPILATION = True  # Set to True to enable C compilation
+    KEIL_PATH = None              # Set path if not in default locations
     # ---------------------
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
@@ -340,7 +395,9 @@ if __name__ == "__main__":
         src_threshold=SRC_THRESHOLD,
         top_metric=TOP_METRIC,
         top_percent=TOP_PERCENT,
-        lab_name=LAB_NAME
+        lab_name=LAB_NAME,
+        use_keil_compilation=USE_KEIL_COMPILATION,
+        keil_path=KEIL_PATH
     )
     
 

@@ -34,7 +34,7 @@ def crawl_directory(root_path):
             
             student_files[student_id]['all_files'].append(full_path)
             
-            if ext == '.a51':  # Only .a51 files are valid source code
+            if ext in ['.a51', '.asm', '.c']:  # .a51, .asm, and .c files are valid source code
                 student_files[student_id]['source'].append(full_path)
             elif ext == '.hex':
                 student_files[student_id]['hex'].append(full_path)

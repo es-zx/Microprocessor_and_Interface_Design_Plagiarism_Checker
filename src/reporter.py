@@ -4,7 +4,7 @@ import html
 import json
 
 def generate_html_report(results, hex_threshold, src_threshold, illegal_students=[], anomaly_students=[], lab_name="Lab", 
-                        filter_mode="threshold", top_metric="max_score", top_percent=0.05):
+                        filter_mode="threshold", top_metric="max_score", top_percent=0.05, use_keil_compilation=False):
     """
     Generates an HTML report from the plagiarism results.
     """
@@ -163,7 +163,7 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                     <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; margin-top: 10px;">
                         
                         <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h4 style="color: #27ae60; margin-top: 0;">🔷 Token Sequence Similarity (LCS)</h4>
+                            <h4 style="color: #f39c12; margin-top: 0;">🔶 Token Sequence Similarity (LCS)</h4>
                             <p><strong>原理：</strong>將程式碼視為 Token 序列，計算最長公共子序列 (Longest Common Subsequence)。</p>
                             <p><strong>特性：</strong></p>
                             <ul style="margin: 5px 0; padding-left: 20px;">
@@ -175,7 +175,7 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                         </div>
                         
                         <div style="background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            <h4 style="color: #e74c3c; margin-top: 0;">🔶 Levenshtein Distance (編輯距離)</h4>
+                            <h4 style="color: #3498db; margin-top: 0;">🔷 Levenshtein Distance (編輯距離)</h4>
                             <p><strong>原理：</strong>計算將一個字串轉換為另一個字串所需的最少編輯次數（插入、刪除、替換）。</p>
                             <p><strong>特性：</strong></p>
                             <ul style="margin: 5px 0; padding-left: 20px;">
@@ -185,11 +185,6 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                             </ul>
                             <p><strong>適用情境：</strong>只改了幾個數值或暫存器名稱</p>
                         </div>
-                    </div>
-                    
-                    <div style="margin-top: 15px; padding: 10px; background: #fff3cd; border-radius: 4px;">
-                        <strong>💡 為什麼使用多種演算法？</strong>
-                        <p style="margin: 5px 0;">不同的抄襲手法會在不同的演算法中顯示高相似度。系統綜合這些分數作為判斷依據，以捕捉各種抄襲模式。</p>
                     </div>
                 </div>
             </div>

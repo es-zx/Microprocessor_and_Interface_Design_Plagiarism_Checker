@@ -47,10 +47,10 @@ def compile_c_to_asm_keil(c_file_path, output_dir=None, keil_path=None):
         cmd = [
             c51_compiler,
             temp_c_path,
-            "LST",  # Generate listing file
-            f"OBJ({os.path.splitext(c_filename)[0]}.obj)",
-            f"DEBUG",  # Include debug info
-            f"OPTIMIZE(LEVEL(9))"  # High optimization level
+            f"OBJECT({os.path.splitext(c_filename)[0]}.obj)",
+            "DEBUG",  # Include debug info
+            "OPTIMIZE(9)",  # High optimization level
+            f"INCDIR({os.path.join(keil_path, 'INC')})"  # Include path
         ]
         
         # Run the C51 compiler
@@ -63,7 +63,9 @@ def compile_c_to_asm_keil(c_file_path, output_dir=None, keil_path=None):
         )
         
         if result.returncode != 0:
-            error_msg = f"Compilation failed: {result.stderr}"
+            # Combine stdout and stderr for error message
+            output = result.stdout + "\n" + result.stderr
+            error_msg = f"Compilation failed (Code {result.returncode}): {output.strip()}"
             return False, "", error_msg
         
         # Find the generated assembly file
@@ -89,7 +91,10 @@ def compile_c_to_asm_keil(c_file_path, output_dir=None, keil_path=None):
     finally:
         # Clean up temporary C file if it was copied
         if temp_c_path != c_file_path and os.path.exists(temp_c_path):
-            os.remove(temp_c_path)
+            try:
+                os.remove(temp_c_path)
+            except:
+                pass
 
 
 def find_keil_c51():
