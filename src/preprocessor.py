@@ -105,8 +105,9 @@ def normalize_hex(content):
             if record_type == 0:
                 data_start = 9
                 data_end = 9 + (byte_count * 2)
-                if len(line) < data_end + 2:  # +2 for checksum
-                    format_errors.append(f"Line {line_num}: Data length mismatch")
+                # Be more lenient - just check we have enough data
+                if len(line) < data_end:
+                    format_errors.append(f"Line {line_num}: Insufficient data")
                     continue
                 data = line[data_start:data_end]
                 data_payload += data

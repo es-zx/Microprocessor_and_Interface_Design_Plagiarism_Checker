@@ -1,7 +1,7 @@
 import os
 import itertools
 from tqdm import tqdm
-from preprocessor import crawl_directory, clean_code, normalize_hex
+from preprocessor import crawl_directory, clean_code, normalize_hex, validate_source_code, check_hex_integrity
 from detector import calculate_combined_similarity
 from llm_analyzer import analyze_pair_with_llm
 from reporter import generate_html_report
@@ -21,7 +21,18 @@ def check_plagiarism(root_path, filter_mode="threshold",
 
     # Preprocess all data
     for student, files in student_files.items():
-        student_data[student] = {'source': "", 'hex': "", 'original_source': "", 'illegal_submission': False, 'illegal_reason': ""}
+        student_data[student] = {
+            'source': "", 
+            'hex': "", 
+            'original_source': "", 
+            'illegal_submission': False, 
+            'illegal_reason': "",
+            'hex_anomalies': [],      # List of hex anomalies
+            'source_anomalies': [],   # List of source code anomalies
+            'has_anomaly': False,     # Flag for any anomaly
+            'hex_length': 0,          # Hex data length
+            'hex_info': {}            # Hex validation info
+        }
         
         # Check for illegal submission (no source files or no hex files)
         if not files['source']:
@@ -46,29 +57,48 @@ def check_plagiarism(root_path, filter_mode="threshold",
                     filename = os.path.basename(src_file)
                     full_original_source += f"--- {filename} ---\n{content}\n\n"  
                     full_source += clean_code(content, ext) + " "
+                    
+                    # Validate source code quality
+                    anomalies = validate_source_code(content, ext)
+                    student_data[student]['source_anomalies'].extend(anomalies)
             except Exception as e:
                 print(f"Error reading {src_file}: {e}")      
 
         student_data[student]['source'] = full_source.strip()
         student_data[student]['original_source'] = full_original_source.strip()
         
-        # Combine all hex files
+        # Combine all hex files and collect validation info
         full_hex = ""
+        all_hex_info = {
+            'has_eof': False,
+            'format_errors': [],
+            'valid_lines': 0,
+            'data_length': 0
+        }
+        
         for hex_file in files['hex']:
             try:
                 with open(hex_file, 'r', encoding='utf-8', errors='ignore') as f:
                     content = f.read()
-                    hex_data, _ = normalize_hex(content)  # Ignore validity for now
+                    hex_data, hex_info = normalize_hex(content)
                     full_hex += hex_data
+                    
+                    # Aggregate hex info
+                    if hex_info['has_eof']:
+                        all_hex_info['has_eof'] = True
+                    all_hex_info['format_errors'].extend(hex_info['format_errors'])
+                    all_hex_info['valid_lines'] += hex_info['valid_lines']
 
             except Exception as e:
                 print(f"Error reading {hex_file}: {e}")
 
         student_data[student]['hex'] = full_hex
         student_data[student]['hex_length'] = len(full_hex)
+        all_hex_info['data_length'] = len(full_hex)
+        student_data[student]['hex_info'] = all_hex_info
         
 
-        # Check if hex is empty (illegal submission)
+        # Check if hex is empty (illegal submission - not anomaly)
         if not full_hex or full_hex.strip() == "":
             student_data[student]['illegal_submission'] = True
             if student_data[student]['illegal_reason']:
@@ -79,6 +109,7 @@ def check_plagiarism(root_path, filter_mode="threshold",
     
     # Find median hex length across all students (excluding empty ones)
     hex_lengths = [data['hex_length'] for data in student_data.values() if data['hex_length'] > 0]
+    median_hex_length = 0
     
     if hex_lengths:
         hex_lengths.sort()
@@ -87,18 +118,21 @@ def check_plagiarism(root_path, filter_mode="threshold",
             median_hex_length = (hex_lengths[n//2 - 1] + hex_lengths[n//2]) / 2
         else:
             median_hex_length = hex_lengths[n//2]
-        
-        # Validate hex length: mark as invalid if outside median ± 25% range
-        lower_threshold = median_hex_length * 0.75
-        upper_threshold = median_hex_length * 1.25
-        
-        for student, data in student_data.items():
-            if data['hex_length'] > 0 and (data['hex_length'] < lower_threshold or data['hex_length'] > upper_threshold):
-                student_data[student]['illegal_submission'] = True
-                if student_data[student]['illegal_reason']:
-                    student_data[student]['illegal_reason'] += f" | Hex檔案不完整 (長度{data['hex_length']}，中位數{int(median_hex_length)})"
-                else:
-                    student_data[student]['illegal_reason'] = f"無效提交：Hex檔案不完整 (長度{data['hex_length']}，中位數{int(median_hex_length)})"
+    
+    # Check hex integrity for all students (as anomalies, not illegal submissions)
+    for student, data in student_data.items():
+        if data['hex_length'] > 0:
+            hex_anomalies = check_hex_integrity(
+                data['hex_info'], 
+                data['hex_length'], 
+                median_hex_length
+            )
+            student_data[student]['hex_anomalies'].extend(hex_anomalies)
+    
+    # Mark students with anomalies
+    for student, data in student_data.items():
+        if data['hex_anomalies'] or data['source_anomalies']:
+            student_data[student]['has_anomaly'] = True
         
 
     print("Step 2: Calculating similarities...")
@@ -247,7 +281,6 @@ def check_plagiarism(root_path, filter_mode="threshold",
 
     # Identify illegal students
     illegal_students = []
-
     for student, data in student_data.items():
         if data['illegal_submission']:
             illegal_students.append({
@@ -255,12 +288,24 @@ def check_plagiarism(root_path, filter_mode="threshold",
                 'reason': data['illegal_reason'],
                 'files': data.get('all_files', [])
             })
+    
+    # Identify students with anomalies (but not illegal)
+    anomaly_students = []
+    for student, data in student_data.items():
+        if data['has_anomaly'] and not data['illegal_submission']:
+            anomaly_students.append({
+                'student': student,
+                'hex_anomalies': data['hex_anomalies'],
+                'source_anomalies': data['source_anomalies'],
+                'original_source': data['original_source'],
+                'hex': data['hex']
+            })
 
     # Sort by average score descending
     results.sort(key=lambda x: x['avg_score'], reverse=True)
     
     # Generate Report
-    generate_html_report(results, hex_threshold, src_threshold, illegal_students, lab_name,
+    generate_html_report(results, hex_threshold, src_threshold, illegal_students, anomaly_students, lab_name,
                         filter_mode=filter_mode, top_metric=top_metric, top_percent=top_percent)
     
     return results

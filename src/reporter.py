@@ -3,7 +3,7 @@ import os
 import html
 import json
 
-def generate_html_report(results, hex_threshold, src_threshold, illegal_students=[], lab_name="Lab", 
+def generate_html_report(results, hex_threshold, src_threshold, illegal_students=[], anomaly_students=[], lab_name="Lab", 
                         filter_mode="threshold", top_metric="max_score", top_percent=0.05):
     """
     Generates an HTML report from the plagiarism results.
@@ -33,7 +33,7 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
             h1 {{ text-align: center; color: #2c3e50; }}
             .container {{ max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
             table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
-            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }}
+            th, td {{ padding: 12px; text-align: left; border-bottom: 1px solid #ddd; white-space: nowrap; }}
             th {{ background-color: #3498db; color: white; }}
             tr:hover {{ background-color: #f1f1f1; cursor: pointer; }}
             .score-high {{ color: #e74c3c; font-weight: bold; }}
@@ -96,6 +96,49 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 margin-bottom: 15px;
                 border: 1px solid #bde0fe;
                 color: #2c3e50;
+            }}
+            
+            /* Anomaly section styles */
+            .anomaly-section {{
+                margin: 20px 0;
+                padding: 15px;
+                background: #fffbea;
+                border-left: 4px solid #f39c12;
+                border-radius: 4px;
+            }}
+            .anomaly-header {{
+                margin-top: 0;
+                color: #d68910;
+            }}
+            .anomaly-tag {{
+                display: inline-block;
+                padding: 2px 8px;
+                margin: 2px;
+                border-radius: 3px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+            .anomaly-warning {{
+                background: #fff3cd;
+                color: #856404;
+                border: 1px solid #ffeaa7;
+            }}
+            .anomaly-error {{
+                background: #f8d7da;
+                color: #721c24;
+                border: 1px solid #f5c6cb;
+            }}
+            .view-btn {{
+                padding: 5px 15px;
+                background: #3498db;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+            }}
+            .view-btn:hover {{
+                background: #2980b9;
             }}
         </style>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -165,6 +208,63 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 }
             </script>
     """
+    
+    # Add anomaly section - between plagiarism and illegal submissions
+    if anomaly_students:
+        html_content += f"""
+            <div class="anomaly-section">
+                <h3 class="anomaly-header">⚠️ 檔案異常警告 ({len(anomaly_students)} 位學生)</h3>
+                <p>以下學生的檔案存在異常，但仍參與抄襲比對分析。點擊「查看詳情」可檢視原始碼和 Hex 檔案。</p>
+                <table style="width: 100%; margin-top: 10px;">
+                    <thead>
+                        <tr style="background: #f39c12;">
+                            <th>Student</th>
+                            <th>異常類型</th>
+                            <th>詳細說明</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        """
+        for student in anomaly_students:
+            # Determine anomaly types
+            anomaly_types = []
+            if student['hex_anomalies']:
+                anomaly_types.append('Hex 檔案')
+            if student['source_anomalies']:
+                anomaly_types.append('原始碼')
+            
+            # Get summary of anomalies
+            anomaly_summary = []
+            for anom in student['hex_anomalies'][:2]:  # First 2 hex anomalies
+                anomaly_summary.append(anom['message'])
+            for anom in student['source_anomalies'][:2]:  # First 2 source anomalies
+                anomaly_summary.append(anom['message'])
+            
+            summary_text = '、'.join(anomaly_summary)
+            if len(student['hex_anomalies']) + len(student['source_anomalies']) > 4:
+                summary_text += '...'
+            
+            html_content += f"""
+                        <tr>
+                            <td><strong>{html.escape(student['student'])}</strong></td>
+                            <td>{' + '.join(anomaly_types)}</td>
+                            <td>{html.escape(summary_text)}</td>
+                            <td><button class="view-btn" onclick="openAnomalyModal('{html.escape(student['student'], quote=True)}')">查看詳情</button></td>
+                        </tr>
+                        
+                        <!-- Hidden data for anomaly modal -->
+                        <div id="anomaly-data-{html.escape(student['student'])}" style="display:none;">
+                            <div class="src-content">{html.escape(student.get('original_source', ''))}</div>
+                            <div class="hex-content">{html.escape(student.get('hex', ''))}</div>
+                            <div class="anomalies-json">{html.escape(json.dumps(student['hex_anomalies'] + student['source_anomalies']))}</div>
+                        </div>
+            """
+        html_content += """
+                    </tbody>
+                </table>
+            </div>
+        """
     
     # Add Illegal Submissions Section FIRST
     if illegal_students:
@@ -253,19 +353,17 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
     """
     
     # Determine table headers based on filter mode
-    hex_header = "Hex Max"
-    src_header = "Average Score"
+    hex_header = "Hex Score"  # Always use "Hex Score" for consistency
+    src_header = "Source (Avg)"  # Default to average
     
     if filter_mode == "top_percent":
         if top_metric == "token_seq":
             src_header = "Source (Token Seq)"
-            hex_header = "Hex (Levenshtein)"
         elif top_metric == "levenshtein":
             src_header = "Source (Levenshtein)"
-            hex_header = "Hex (Levenshtein)"
         elif top_metric == "avg_score":
-            src_header = "Average Score"
-            hex_header = "Hex (Levenshtein)"
+            src_header = "Source (Avg)"
+    # In threshold mode, keep "Source (Avg)" as default
             
     html_content += f"""
             <table>
@@ -594,12 +692,107 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
                 document.getElementById('myModal').style.display = "none";
             }
             
+            function openAnomalyModal(studentName) {
+                const dataDiv = document.getElementById('anomaly-data-' + studentName);
+                if (!dataDiv) return;
+                
+                const srcContent = dataDiv.querySelector('.src-content').innerText;
+                const hexContent = dataDiv.querySelector('.hex-content').innerText;
+                const anomaliesJson = dataDiv.querySelector('.anomalies-json').innerText;
+                const anomalies = JSON.parse(anomaliesJson);
+                
+                // Set title
+                document.getElementById('anomaly-student-title').innerText = '檔案異常詳情 - ' + studentName;
+                
+                // Set source code with line numbers
+                document.getElementById('anomaly-src-content').innerText = srcContent;
+                const lines = srcContent.split('\n').length;
+                let lineNumbers = '';
+                for (let i = 1; i <= lines; i++) {
+                    lineNumbers += i + '\n';
+                }
+                document.getElementById('anomaly-src-lines').innerText = lineNumbers;
+                
+                // Set hex content
+                document.getElementById('anomaly-hex-content').innerText = hexContent;
+                
+                // Set anomalies list
+                const listDiv = document.getElementById('anomaly-list');
+                listDiv.innerHTML = '';
+                
+                anomalies.forEach(anom => {
+                    const item = document.createElement('div');
+                    item.className = 'anomaly-warning';
+                    if (anom.severity === 'error') {
+                        item.className = 'anomaly-error';
+                    }
+                    item.style.padding = '10px';
+                    item.style.marginBottom = '10px';
+                    item.style.borderRadius = '4px';
+                    
+                    let html = `<strong>[${anom.code}] ${anom.message}</strong>`;
+                    if (anom.details) {
+                        html += '<ul style="margin: 5px 0 0 20px; font-size: 12px;">';
+                        for (const [key, value] of Object.entries(anom.details)) {
+                            html += `<li>${key}: ${value}</li>`;
+                        }
+                        html += '</ul>';
+                    }
+                    item.innerHTML = html;
+                    listDiv.appendChild(item);
+                });
+                
+                document.getElementById('anomalyModal').style.display = "block";
+            }
+            
+            function closeAnomalyModal() {
+                document.getElementById('anomalyModal').style.display = "none";
+            }
+            
             window.onclick = function(event) {
                 if (event.target == document.getElementById('myModal')) {
                     closeModal();
                 }
+                if (event.target == document.getElementById('anomalyModal')) {
+                    closeAnomalyModal();
+                }
             }
         </script>
+        
+        <!-- Anomaly Modal -->
+        <div id="anomalyModal" class="modal">
+            <div class="modal-content" style="width: 90%; height: 90%;">
+                <span class="close" onclick="closeAnomalyModal()">&times;</span>
+                <h2 id="anomaly-student-title" style="margin-top: 0; color: #d68910;">檔案異常詳情</h2>
+                
+                <div style="display: flex; flex: 1; gap: 20px; overflow: hidden;">
+                    <!-- Source Code Column -->
+                    <div class="code-block" style="flex: 1;">
+                        <h3>原始碼</h3>
+                        <div class="code-container">
+                            <div class="line-numbers" id="anomaly-src-lines"></div>
+                            <pre id="anomaly-src-content"></pre>
+                        </div>
+                    </div>
+                    
+                    <!-- Hex Data Column -->
+                    <div class="code-block" style="flex: 1;">
+                        <h3>Hex 檔案</h3>
+                        <div class="code-container">
+                            <pre id="anomaly-hex-content"></pre>
+                        </div>
+                    </div>
+                    
+                    <!-- Anomalies List Column -->
+                    <div class="code-block" style="flex: 0 0 300px; background: #fffbea;">
+                        <h3 style="background: #f39c12; color: white;">異常列表</h3>
+                        <div id="anomaly-list" style="padding: 15px; overflow-y: auto;">
+                            <!-- Anomalies will be inserted here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </body>
     </html>
     """
