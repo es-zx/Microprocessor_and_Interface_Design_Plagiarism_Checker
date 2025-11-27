@@ -41,6 +41,90 @@ def crawl_directory(root_path):
                 
     return student_files
 
+def preprocess_c_code(content):
+    """
+    Enhanced C preprocessing that handles C preprocessor directives without requiring Keil C51.
+    """
+    # First, handle line continuations (backslash at end of line)
+    content = re.sub(r'\\\s*\n', ' ', content)
+
+    # Remove C comments (both single-line and multi-line) while preserving line structure
+    # Use a function to preserve line count for proper line numbers after preprocessing
+    def replace_comments(match):
+        return '\n' * match.group(0).count('\n')
+
+    # Handle multi-line comments first
+    content = re.sub(r'/\*.*?\*/', replace_comments, content, flags=re.DOTALL)
+    # Handle single-line comments
+    content = re.sub(r'//.*', '', content)
+
+    # Process preprocessor directives
+    # Split content into lines to process directives that start lines
+    lines = content.split('\n')
+    processed_lines = []
+    skip_nesting = 0  # Track nested #ifdef/#ifndef blocks
+
+    for line in lines:
+        # Check if the line starts with # at the beginning (ignoring leading whitespace)
+        if re.match(r'^\s*#', line):
+            # Extract the directive after the #
+            directive_match = re.match(r'^\s*#\s*(\w+)', line)
+            if directive_match:
+                cmd = directive_match.group(1).lower()
+
+                # Handle conditional compilation directives
+                if cmd in ['ifdef', 'ifndef', 'if']:
+                    skip_nesting += 1
+                    processed_lines.append('')  # Add empty line to preserve structure
+                    continue
+                elif cmd in ['else', 'elif']:
+                    if skip_nesting > 0:  # Only skip if inside a nested block
+                        processed_lines.append('')  # Add empty line to preserve structure
+                        continue
+                    else:
+                        processed_lines.append(line)  # Keep the line if not skipping
+                        continue
+                elif cmd == 'endif':
+                    if skip_nesting > 0:
+                        skip_nesting -= 1
+                    processed_lines.append('')  # Add empty line to preserve structure
+                    continue
+                elif cmd == 'define':
+                    # Remove #define directives
+                    processed_lines.append('')
+                    continue
+                elif cmd in ['include', 'pragma', 'error', 'warning']:
+                    # Remove other preprocessor directives
+                    processed_lines.append('')
+                    continue
+                else:
+                    # Remove other directives we don't specifically handle
+                    processed_lines.append('')
+                    continue
+
+        # If not in a conditional compilation block, add the line
+        if skip_nesting == 0:
+            # If the line had a preprocessor directive in the middle that wasn't at the start,
+            # we need to handle it specially. But normal case is line starts with #
+            processed_lines.append(line)
+        else:
+            processed_lines.append('')  # Add empty line to preserve structure
+
+    content = '\n'.join(processed_lines)
+
+    # Normalize all whitespace (newlines, tabs, spaces) to single spaces
+    content = re.sub(r'\s+', ' ', content)
+
+    # Convert to lowercase for case-insensitive comparison
+    content = content.lower()
+
+    # For C code, keep hex in 0x format (don't convert to assembly h suffix)
+    # Just ensure consistent formatting
+    content = re.sub(r'\b0+([0-9a-f]+)', r'\1', content)  # Strip leading zeros in hex values
+
+    return content.strip()
+
+
 def clean_code(content, file_extension):
     """
     Removes comments and normalizes whitespace.
@@ -49,26 +133,23 @@ def clean_code(content, file_extension):
     if file_extension in ['.a51', '.asm']:
         # Assembly comments start with ;
         content = re.sub(r';.*', '', content)
-    elif file_extension in ['.c']: # Assuming txt is C-like or mixed
-        # C comments // and /* */
-        content = re.sub(r'//.*', '', content)
-        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-        
-    # Normalize whitespace
-    # Replace multiple spaces/tabs with single space
-    content = re.sub(r'\s+', ' ', content)
-    
-    # Convert to lowercase for case-insensitive comparison
-    content = content.lower()
-    
-    # Normalize hex immediates: 0x?? -> ??h
-    # This matches 0x followed by hex digits and converts to hex digits + h
-    content = re.sub(r'0x([0-9a-f]+)', r'\1h', content)
-    
-    # Strip leading zeros from hex values ending in h (e.g. 012h -> 12h, 0ah -> ah)
-    # But preserve single 0 (0h -> 0h)
-    content = re.sub(r'\b0+([0-9a-f]+h)', r'\1', content)
-    
+        # Apply same normalization as before for assembly files
+        content = re.sub(r'\s+', ' ', content)
+        content = content.lower()
+        # Normalize hex immediates: 0x?? -> ??h (assembly-specific)
+        # But be careful not to double-convert values that already have h suffix
+        content = re.sub(r'\b0x([0-9a-f]+)(?!\w)', r'\1h', content)  # Only convert if not already followed by h or other word character
+        # Strip leading zeros from hex values ending in h
+        content = re.sub(r'\b0+([0-9a-f]+h)', r'\1', content)
+    elif file_extension in ['.c']: # Enhanced C preprocessing
+        content = preprocess_c_code(content)
+    else:
+        # For other extensions, normalize whitespace and convert to lowercase
+        content = re.sub(r'\s+', ' ', content)
+        content = content.lower()
+        # For other text files, just strip leading zeros in hex values but keep 0x format
+        content = re.sub(r'\b0+([0-9a-f]+)', r'\1', content)
+
     return content.strip()
 
 def normalize_hex(content):

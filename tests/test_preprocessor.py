@@ -51,11 +51,45 @@ class TestCleanCode(unittest.TestCase):
         cleaned = clean_code("", '.a51')
         self.assertEqual(cleaned, "")
         
+    def test_c_preprocessor_directives(self):
+        code = """#include <stdio.h>
+        #define MAX 100
+        int main() {
+            #ifdef DEBUG
+            printf("Debug mode\\n");
+            #endif
+            int x = 0xFF; // hex value
+            return 0;
+        }"""
+        cleaned = clean_code(code, '.c')
+        # Should remove preprocessor directives
+        self.assertNotIn('#include', cleaned)
+        self.assertNotIn('#define', cleaned)
+        self.assertNotIn('#ifdef', cleaned)
+        self.assertNotIn('#endif', cleaned)
+        # Should keep the actual code
+        self.assertIn('main', cleaned)
+        self.assertIn('return', cleaned)
+        # Should keep hex values in C format
+        self.assertIn('0xff', cleaned)  # Note: converted to lowercase by preprocessing
+        # Should not convert to assembly format
+        self.assertNotIn('ffh', cleaned)
+
+    def test_c_multiline_macros(self):
+        code = """#define LONG_MACRO \\
+        do { \\
+            int x = 5; \\
+            printf("%d", x); \\
+        } while(0)"""
+        cleaned = clean_code(code, '.c')
+        # Should remove the macro definition
+        self.assertNotIn('#define', cleaned)
+
     def test_unknown_extension(self):
         code = "some code"
         cleaned = clean_code(code, '.txt')
         # Should return as-is for unknown extensions
-        self.assertEqual(cleaned, code)
+        self.assertEqual(cleaned, code.lower())  # Now it's normalized with case and whitespace
 
 
 class TestNormalizeHex(unittest.TestCase):
