@@ -54,9 +54,9 @@ def check_plagiarism(root_path, filter_mode="threshold",
         
         # Check for illegal submission (no valid source files or no hex files)
         # Determine valid extensions based on configuration
-        valid_extensions = ['.a51', '.asm']
-        if use_keil_compilation:
-            valid_extensions.append('.c')
+        valid_extensions = ['.a51', '.asm', '.c']
+        # if use_keil_compilation:
+        #     valid_extensions.append('.c')
             
         has_valid_source = False
         for src_file in files['source']:
@@ -70,7 +70,7 @@ def check_plagiarism(root_path, filter_mode="threshold",
             if files['all_files']:
                 # Found files but not valid source
                 exts = set([os.path.splitext(f)[1] for f in files['all_files']])
-                student_data[student]['illegal_reason'] = f"無效提交：找到 {', '.join(exts)} 檔案，但需要 {', '.join(valid_extensions)} 檔案"
+                student_data[student]['illegal_reason'] = f"無效提交：找到 {', '.join(exts)} 檔案，但需要 (C 或 A51) 檔案"
             else:
                 student_data[student]['illegal_reason'] = "未找到任何檔案"
         
@@ -170,6 +170,10 @@ def check_plagiarism(root_path, filter_mode="threshold",
                 student_data[student]['illegal_reason'] += " | 未找到有效的 hex 檔案"
             else:
                 student_data[student]['illegal_reason'] = "無效提交：未找到有效的 hex 檔案"
+        
+        with open('debug.log', 'a', encoding='utf-8') as f:
+            f.write(f"DEBUG: Student {student} - Illegal: {student_data[student]['illegal_submission']}, Reason: {student_data[student]['illegal_reason']}\n")
+            f.write(f"DEBUG: Files: {files}\n")
         
     
     # Find median hex length across all students (excluding empty ones)

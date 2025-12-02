@@ -266,7 +266,7 @@ def generate_html_report(results, hex_threshold, src_threshold, illegal_students
         html_content += f"""
             <div class="illegal-section" style="margin: 20px 0; padding: 15px; background: #fff3cd; border-left: 4px solid #f39c12; border-radius: 4px;">
                 <h3 style="margin-top: 0; color: #e67e22;">⚠️ 無效提交名單 ({len(illegal_students)} 位學生)</h3>
-                <p>以下學生提交的檔案不符合規定格式（.a51）或缺少/空白 hex 檔案。</p>
+                <p>以下學生提交的檔案不符合規定格式（需包含 .c 或 .a51 原始碼，且必須包含 .hex 檔案）。</p>
                 <table style="width: 100%; margin-top: 10px;">
                     <thead>
                         <tr style="background: #f39c12;">
